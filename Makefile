@@ -18,7 +18,7 @@ db-up: ## start Postgres in Docker (background)
 
 pgadmin: ## start Postgres + pgAdmin GUI at http://localhost:5050
 	docker compose --profile tools up -d
-	@echo "pgAdmin: http://localhost:5050  (login admin@ledger.local / admin)"
+	@echo "pgAdmin: http://localhost:5050  (no login needed; DB password: ledger)"
 
 db-down: ## stop Postgres, keep the data volume
 	docker compose down
