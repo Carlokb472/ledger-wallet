@@ -2,6 +2,7 @@ package api
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -12,11 +13,12 @@ import (
 
 func setup(t *testing.T) *Server {
 	t.Helper()
-	l := ledger.New()
-	l.OpenAccount("world", "HKD", true)
-	l.OpenAccount("alice", "HKD", false)
-	l.OpenAccount("bob", "HKD", false)
-	if _, err := l.Transfer("seed", "world", "alice", 10000); err != nil {
+	ctx := context.Background()
+	l := ledger.NewMemStore()
+	l.OpenAccount(ctx, "world", "HKD", true)
+	l.OpenAccount(ctx, "alice", "HKD", false)
+	l.OpenAccount(ctx, "bob", "HKD", false)
+	if _, err := ledger.Transfer(ctx, l, "seed", "world", "alice", 10000); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
 	return NewServer(l)

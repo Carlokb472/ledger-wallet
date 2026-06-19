@@ -1,37 +1,69 @@
 # ledger-wallet
 
-A minimal **append-only, double-entry ledger** with an **idempotent** HTTP transfer API, written in Go with **zero third-party dependencies** (standard library only).
+A minimal **append-only, double-entry ledger** with an **idempotent** HTTP transfer API, written in Go. It ships with **two interchangeable storage backends** behind one interface:
 
-This is a portfolio project that demonstrates the core money-handling patterns every fintech / crypto-trading backend relies on. The goal is not feature breadth — it is to get the *invariants* right and to be explicit about the trade-offs.
+- **in-memory** — zero dependencies, used for tests and quick demos
+- **Postgres** — durable, multi-process safe, with idempotency enforced atomically by a `UNIQUE` constraint
+
+This is a portfolio project demonstrating the core money-handling patterns every fintech / crypto-trading backend relies on. The goal isn't feature breadth — it's getting the *invariants* right and being explicit about the trade-offs.
 
 ## Why these design choices (the interesting part)
 
 | Decision | Reason |
 |---|---|
 | **Money as `int64` minor units, never `float64`** | Floats can't represent `0.10` exactly; arithmetic drifts and you lose cents. Integers are exact. Format to a decimal string only at the edge (`FormatMinor`). |
-| **Append-only log; balances are *derived*** | The ledger never mutates a balance field. Every balance is recomputed by folding the immutable transaction log, so it can never silently disagree with history. This is what makes the system auditable and reconcilable. |
-| **Double-entry: postings must sum to zero** | Money is only ever *moved*, never created or destroyed. A transaction that doesn't balance is rejected (`ErrUnbalanced`). The whole system always nets to zero. |
+| **Append-only log; balances are *derived*** | The ledger never mutates a balance field. Every balance is recomputed by folding the immutable transaction log (`SUM(amount)`), so it can never silently disagree with history. This is what makes it auditable and reconcilable. |
+| **Double-entry: postings must sum to zero** | Money is only ever *moved*, never created or destroyed. A transaction that doesn't balance is rejected. The whole system always nets to zero. |
 | **Idempotency keys on every write** | A client that retries after a network timeout must not double-charge. Replaying a key returns the original transaction; reusing a key with a *different* body is a `409 Conflict` — same contract as Stripe. |
+| **Postgres idempotency via `UNIQUE` + `INSERT ... ON CONFLICT`** | The key is claimed atomically by the database. Two concurrent requests with the same key block on the unique index, so **exactly one** ever posts — no application-level lock, correct even across multiple server processes. |
 | **A funding `world` account that may go negative** | Money enters the system from somewhere. `world` is flagged `allow_negative`; ordinary user accounts are not, so they can't overdraft. |
 
 ## Layout
 
 ```
-cmd/server/        # main: wires the ledger to the HTTP server
-internal/ledger/   # the domain core — Ledger, Posting, Transaction (no HTTP here)
-internal/api/      # thin HTTP adapter over the ledger (stdlib net/http)
+cmd/server/        # main: selects backend (DATABASE_URL) and serves HTTP
+internal/ledger/   # the domain core — no HTTP knowledge
+  ledger.go        #   types + sentinel errors
+  store.go         #   Store interface + Transfer() + idempotency comparison
+  memstore.go      #   in-memory backend (sync.RWMutex)
+  postgres.go      #   Postgres backend (pgx, transactions, row locks)
+  money.go         #   int64 minor-unit helpers
+  migrations/      #   SQL schema (embedded)
+internal/api/      # thin stdlib net/http adapter over a ledger.Store
 ```
 
-The domain (`internal/ledger`) has **no knowledge of HTTP**; the API layer maps domain errors to status codes. You can test, reuse, or swap either side independently.
+Both backends implement `ledger.Store`, so the HTTP layer is identical regardless of where money is stored — the ports-and-adapters boundary.
 
 ## Run
 
 Requires Go 1.22+.
 
 ```bash
-go test ./...          # run the test suite
-go vet ./...           # static checks
-go run ./cmd/server    # start the API on :8080
+go test ./...                    # in-memory tests (Postgres tests auto-skip)
+go run ./cmd/server              # in-memory backend on :8080
+```
+
+### With Postgres (durable backend)
+
+```bash
+# Option A: Docker
+docker compose up -d
+export DATABASE_URL=postgres://ledger:ledger@localhost:5432/ledger
+
+# Option B: local Postgres (e.g. Homebrew)
+createdb ledger
+export DATABASE_URL=postgres://localhost:5432/ledger?sslmode=disable
+
+go run ./cmd/server              # migrates on startup, then serves
+```
+
+Data now survives restarts, and the idempotency guarantee holds across process restarts because it lives in the database.
+
+### Run the Postgres integration tests
+
+```bash
+export TEST_DATABASE_URL=postgres://localhost:5432/ledger_test?sslmode=disable
+go test ./...                    # now includes the Postgres suite
 ```
 
 ## API
@@ -46,23 +78,19 @@ go run ./cmd/server    # start the API on :8080
 ### Example session
 
 ```bash
-# Open two user accounts (a "world" funding account is created at startup).
 curl -s localhost:8080/accounts -d '{"id":"alice","currency":"HKD"}'
 curl -s localhost:8080/accounts -d '{"id":"bob","currency":"HKD"}'
 
-# Fund alice with 100.00 from world.
-curl -s localhost:8080/transfers \
-  -H 'Idempotency-Key: seed-1' \
+# Fund alice with 100.00 from the world account.
+curl -s localhost:8080/transfers -H 'Idempotency-Key: seed-1' \
   -d '{"from":"world","to":"alice","amount":10000}'
 
 # Move 30.00 alice -> bob.
-curl -s localhost:8080/transfers \
-  -H 'Idempotency-Key: pay-42' \
+curl -s localhost:8080/transfers -H 'Idempotency-Key: pay-42' \
   -d '{"from":"alice","to":"bob","amount":3000}'
 
 # Retrying the SAME key is safe — bob is credited only once.
-curl -s localhost:8080/transfers \
-  -H 'Idempotency-Key: pay-42' \
+curl -s localhost:8080/transfers -H 'Idempotency-Key: pay-42' \
   -d '{"from":"alice","to":"bob","amount":3000}'
 
 curl -s localhost:8080/accounts/bob/balance   # -> {"balance":3000,"display":"30.00",...}
@@ -70,16 +98,30 @@ curl -s localhost:8080/accounts/bob/balance   # -> {"balance":3000,"display":"30
 
 ## Tested invariants
 
+In-memory **and** Postgres backends are covered by the same scenarios:
+
 - transfers move money and the system always nets to zero
 - replaying an idempotency key charges exactly once
 - reusing a key with a different body is a conflict
-- unbalanced postings are rejected
-- ordinary accounts cannot overdraft (blocked transfers leave balances untouched)
+- unbalanced postings are rejected; ordinary accounts cannot overdraft
 - currency mismatches and unknown accounts are rejected
 
-## Next steps (deliberately out of scope here)
+Postgres-only tests additionally prove:
 
-- **Persistence**: swap the in-memory log for Postgres (`transactions` + `postings` tables, the key being an append-only insert). Add a `UNIQUE` constraint on the idempotency key to enforce it at the DB layer too.
-- **Balance snapshots**: cache per-account balances and update them transactionally to avoid folding the whole log on every read.
-- **Concurrency**: the current `sync.RWMutex` serialises writes; a DB-backed version would use row locks / serializable transactions instead.
-```
+- **concurrency** — 12 goroutines firing the *same* idempotency key result in exactly one charge (the `INSERT ... ON CONFLICT` claim)
+- **durability** — a fresh connection sees what a previous one committed
+
+## How the Postgres `Post` stays correct
+
+One SQL transaction does the whole thing:
+
+1. **Claim the key** — `INSERT INTO transactions (idempotency_key) ... ON CONFLICT DO NOTHING RETURNING seq`. A returned row means we won; no row means the key exists, so we load the original and either replay it or reject the conflict.
+2. **Lock the accounts** — `SELECT ... FOR UPDATE` in sorted order (deadlock-free) so concurrent transfers on the same account serialise.
+3. **Validate** — accounts exist, single currency, postings sum to zero, no overdraft.
+4. **Append postings and commit.**
+
+## Next steps
+
+- **Balance snapshots**: cache per-account balances, updated transactionally, to avoid `SUM`-ing the whole postings table on every read.
+- **Idempotency-key TTL**: a cleanup job deleting keys older than the retry window (e.g. 24h), plus an `in-progress`/`completed` status column to handle crashed mid-flight requests.
+- **Multi-currency transfers**: FX postings through an intermediary account.

@@ -1,6 +1,7 @@
 // Package api exposes the ledger over HTTP using only the standard library.
-// Routing uses the Go 1.22 method+path patterns in net/http.ServeMux, so there
-// are no third-party dependencies.
+// Routing uses the Go 1.22 method+path patterns in net/http.ServeMux. The
+// handlers depend on the ledger.Store interface, so the same server runs against
+// either the in-memory or the Postgres backend.
 package api
 
 import (
@@ -11,15 +12,15 @@ import (
 	"github.com/Carlokb472/ledger-wallet/internal/ledger"
 )
 
-// Server adapts a *ledger.Ledger to an http.Handler.
+// Server adapts a ledger.Store to an http.Handler.
 type Server struct {
-	ledger *ledger.Ledger
-	mux    *http.ServeMux
+	store ledger.Store
+	mux   *http.ServeMux
 }
 
 // NewServer wires the routes and returns a ready handler.
-func NewServer(l *ledger.Ledger) *Server {
-	s := &Server{ledger: l, mux: http.NewServeMux()}
+func NewServer(store ledger.Store) *Server {
+	s := &Server{store: store, mux: http.NewServeMux()}
 	s.mux.HandleFunc("POST /accounts", s.handleOpenAccount)
 	s.mux.HandleFunc("GET /accounts/{id}/balance", s.handleBalance)
 	s.mux.HandleFunc("POST /transfers", s.handleTransfer)
@@ -43,7 +44,7 @@ func (s *Server) handleOpenAccount(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "invalid JSON body")
 		return
 	}
-	acc, err := s.ledger.OpenAccount(req.ID, req.Currency, req.AllowNegative)
+	acc, err := s.store.OpenAccount(r.Context(), req.ID, req.Currency, req.AllowNegative)
 	if err != nil {
 		writeErr(w, statusFor(err), err.Error())
 		return
@@ -53,7 +54,7 @@ func (s *Server) handleOpenAccount(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleBalance(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	bal, err := s.ledger.Balance(id)
+	bal, err := s.store.Balance(r.Context(), id)
 	if err != nil {
 		writeErr(w, statusFor(err), err.Error())
 		return
@@ -85,7 +86,7 @@ func (s *Server) handleTransfer(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "invalid JSON body")
 		return
 	}
-	tx, err := s.ledger.Transfer(key, req.From, req.To, req.Amount)
+	tx, err := ledger.Transfer(r.Context(), s.store, key, req.From, req.To, req.Amount)
 	if err != nil {
 		writeErr(w, statusFor(err), err.Error())
 		return
@@ -94,7 +95,12 @@ func (s *Server) handleTransfer(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleTransactions(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, s.ledger.Transactions())
+	txns, err := s.store.Transactions(r.Context())
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, txns)
 }
 
 // statusFor maps domain errors to HTTP status codes via errors.Is, keeping the
