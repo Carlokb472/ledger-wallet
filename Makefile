@@ -2,7 +2,7 @@
 DB_URL      ?= postgres://ledger:ledger@localhost:5432/ledger
 TEST_DB_URL ?= postgres://ledger:ledger@localhost:5432/ledger_test
 
-.PHONY: help test test-pg db-up db-down db-reset db-logs run run-pg vet build tidy
+.PHONY: help test test-pg db-up pgadmin db-down db-reset db-logs run run-pg vet build tidy
 
 help: ## list available commands
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}{printf "  \033[36m%-10s\033[0m %s\n", $$1, $$2}'
@@ -15,6 +15,10 @@ test-pg: ## run ALL tests incl. Postgres integration (needs: make db-up)
 
 db-up: ## start Postgres in Docker (background)
 	docker compose up -d
+
+pgadmin: ## start Postgres + pgAdmin GUI at http://localhost:5050
+	docker compose --profile tools up -d
+	@echo "pgAdmin: http://localhost:5050  (login admin@ledger.local / admin)"
 
 db-down: ## stop Postgres, keep the data volume
 	docker compose down

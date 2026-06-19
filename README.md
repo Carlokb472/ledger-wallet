@@ -71,6 +71,17 @@ make test-pg      # runs the full suite against the `ledger_test` database
 
 `make help` lists every command.
 
+### Browse the database (pgAdmin in Docker)
+
+```bash
+make pgadmin      # starts Postgres + pgAdmin
+```
+
+Open <http://localhost:5050>, log in with `admin@ledger.local` / `admin`. The
+**ledger (docker)** server is pre-registered — expand it and enter the password
+`ledger` on first connect. Running pgAdmin in Docker avoids the native-macOS
+OpenSSL signing issues some installs hit.
+
 ## API
 
 | Method & path | Body / headers | Purpose |

@@ -1,12 +1,13 @@
-# Local Postgres for the durable backend.
+# Local Postgres (+ optional pgAdmin) for the durable backend.
 #
-#   make db-up                 # start Postgres in the background
-#   make run-pg                # run the server against it
-#   make test-pg               # run the full suite incl. Postgres integration
-#   make db-down               # stop (keeps data) / make db-reset wipes data
+#   make db-up                 # start Postgres only (for app/tests)
+#   make pgadmin               # start Postgres + pgAdmin GUI on :5050
+#   make run-pg                # run the server against Postgres
+#   make test-pg               # full suite incl. Postgres integration
+#   make db-down               # stop everything (keeps data)
 #
-# Creates two databases: `ledger` (for the app) and `ledger_test` (for tests),
-# so running the tests never truncates your app data.
+# Creates two databases: `ledger` (app) and `ledger_test` (tests), so running
+# the tests never truncates app data.
 services:
   db:
     image: postgres:16
@@ -26,5 +27,27 @@ services:
       timeout: 3s
       retries: 10
 
+  # GUI for browsing the database. Only starts with `make pgadmin` (profile
+  # "tools"), so a plain `make db-up` stays lean. Reaches Postgres at host "db"
+  # over the compose network — sidesteps the native-macOS OpenSSL signing bug.
+  pgadmin:
+    image: dpage/pgadmin4
+    container_name: ledger-pgadmin
+    profiles: ["tools"]
+    environment:
+      PGADMIN_DEFAULT_EMAIL: admin@ledger.local
+      PGADMIN_DEFAULT_PASSWORD: admin
+      PGADMIN_CONFIG_SERVER_MODE: "False"
+      PGADMIN_CONFIG_MASTER_PASSWORD_REQUIRED: "False"
+    ports:
+      - "5050:80"
+    volumes:
+      - ./docker/pgadmin-servers.json:/pgadmin4/servers.json:ro
+      - pgadmin_data:/var/lib/pgadmin
+    depends_on:
+      db:
+        condition: service_healthy
+
 volumes:
   pgdata:
+  pgadmin_data:

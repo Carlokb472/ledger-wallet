@@ -1,0 +1,14 @@
+{
+  "Servers": {
+    "1": {
+      "Name": "ledger (docker)",
+      "Group": "Servers",
+      "Host": "db",
+      "Port": 5432,
+      "MaintenanceDB": "ledger",
+      "Username": "ledger",
+      "SSLMode": "prefer",
+      "Comment": "Auto-registered. Password is 'ledger' (type it on first connect)."
+    }
+  }
+}
