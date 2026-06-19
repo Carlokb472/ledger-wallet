@@ -1,20 +1,30 @@
-# Spin up a local Postgres for the durable backend:
-#   docker compose up -d
-#   DATABASE_URL=postgres://ledger:ledger@localhost:5432/ledger go run ./cmd/server
+# Local Postgres for the durable backend.
 #
-# For the integration tests:
-#   TEST_DATABASE_URL=postgres://ledger:ledger@localhost:5432/ledger go test ./...
+#   make db-up                 # start Postgres in the background
+#   make run-pg                # run the server against it
+#   make test-pg               # run the full suite incl. Postgres integration
+#   make db-down               # stop (keeps data) / make db-reset wipes data
+#
+# Creates two databases: `ledger` (for the app) and `ledger_test` (for tests),
+# so running the tests never truncates your app data.
 services:
   db:
     image: postgres:16
+    container_name: ledger-postgres
     environment:
       POSTGRES_USER: ledger
       POSTGRES_PASSWORD: ledger
       POSTGRES_DB: ledger
     ports:
       - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./docker/initdb.sql:/docker-entrypoint-initdb.d/initdb.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ledger"]
       interval: 2s
       timeout: 3s
       retries: 10
+
+volumes:
+  pgdata:

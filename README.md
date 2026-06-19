@@ -46,25 +46,30 @@ go run ./cmd/server              # in-memory backend on :8080
 ### With Postgres (durable backend)
 
 ```bash
-# Option A: Docker
-docker compose up -d
+make db-up        # start Postgres in Docker (creates `ledger` + `ledger_test`)
+make run-pg       # run the server against it (migrates on startup)
+```
+
+Or by hand, against any Postgres:
+
+```bash
 export DATABASE_URL=postgres://ledger:ledger@localhost:5432/ledger
-
-# Option B: local Postgres (e.g. Homebrew)
-createdb ledger
-export DATABASE_URL=postgres://localhost:5432/ledger?sslmode=disable
-
-go run ./cmd/server              # migrates on startup, then serves
+go run ./cmd/server
 ```
 
 Data now survives restarts, and the idempotency guarantee holds across process restarts because it lives in the database.
 
+> Port 5432 conflict: if a local (e.g. Homebrew) Postgres is already running,
+> stop it first — `brew services stop postgresql@16` — so Docker can bind 5432.
+
 ### Run the Postgres integration tests
 
 ```bash
-export TEST_DATABASE_URL=postgres://localhost:5432/ledger_test?sslmode=disable
-go test ./...                    # now includes the Postgres suite
+make db-up        # if not already running
+make test-pg      # runs the full suite against the `ledger_test` database
 ```
+
+`make help` lists every command.
 
 ## API
 
